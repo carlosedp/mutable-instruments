@@ -35,7 +35,7 @@
 
 namespace rings {
 
-const uint32_t kSettingsId = 259583919;
+const uint32_t kSettingsId = 259583920;
 
 struct CalibrationData {
   float pitch_offset;
@@ -48,6 +48,7 @@ struct CalibrationData {
 struct State {
   uint32_t settings_version_id;
   float locked_transpose;
+  float output_volume;             // Master output volume: 0.0 (silent) to 1.0 (full)
   uint8_t polyphony;
   uint8_t model;
   uint8_t easter_egg;
@@ -63,7 +64,7 @@ struct State {
 struct SettingsData {
   CalibrationData calibration_data; // 40 bytes
   State state;  // 14 bytes
-  uint8_t padding[10];
+  uint8_t padding[6];
 };
 
 class Settings {

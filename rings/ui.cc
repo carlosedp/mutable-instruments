@@ -29,6 +29,7 @@
 #include "rings/ui.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "stmlib/system/system_clock.h"
 
@@ -106,9 +107,24 @@ void Ui::Poll() {
         press_time_[i] = 0;
       } else if (pressed_time > kMediumPressDuration &&
                  mode_ == UI_MODE_NORMAL &&
+                 i == 0 &&
+                 !switches_.pressed(1)) {
+        // Polyphony button held alone: enter output-volume adjust mode.
+        // Zero press_time to suppress the normal long-hold and release events.
+        press_time_[i] = 0;
+        mode_ = UI_MODE_VOLUME_ADJUST;
+        cv_scaler_->SetVolumeAdjustMode(true, settings_->state().output_volume);
+      } else if (pressed_time > kMediumPressDuration &&
+                 mode_ == UI_MODE_NORMAL &&
                  switches_.pressed(1 - i)) {
         mode_ = UI_MODE_DISPLAY_FREQUENCY_LOCKING;
       }
+    }
+    if (mode_ == UI_MODE_VOLUME_ADJUST && switches_.released(0)) {
+      // Polyphony button released: leave volume adjust mode.
+      mode_ = UI_MODE_NORMAL;
+      cv_scaler_->SetVolumeAdjustMode(false);
+      settings_->Save();
     }
     if (switches_.released(i) && press_time_[i] != 0) {
       queue_.AddEvent(
@@ -209,6 +225,20 @@ void Ui::Poll() {
       } else {
         leds_.set(0, blink, 0);
         leds_.set(1, blink, 0);
+      }
+      break;
+
+    case UI_MODE_VOLUME_ADJUST:
+      {
+        // LED 0: red blink – indicates volume-adjust mode is active.
+        // LED 1: green brightness proportional to current output volume.
+        uint8_t pwm = system_clock.milliseconds() & 15;
+        float vol = settings_->state().output_volume;
+        // Invert the quadratic taper for display (show linear perception).
+        uint8_t vol_led = static_cast<uint8_t>(sqrtf(vol) * 15.0f);
+        bool mode_blink = (system_clock.milliseconds() & 255) > 128;
+        leds_.set(0, mode_blink, false);
+        leds_.set(1, false, pwm < vol_led);
       }
       break;
 

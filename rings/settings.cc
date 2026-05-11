@@ -67,6 +67,7 @@ void Settings::Init() {
 void Settings::InitState() {
   data_.state.settings_version_id = kSettingsId;
   data_.state.locked_transpose = 0.0f;
+  data_.state.output_volume = 1.0f;
   data_.state.polyphony = 1;
   data_.state.model = 0;
   data_.state.easter_egg = 0;

@@ -117,8 +117,9 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
   }
 
   for (size_t i = 0; i < size; ++i) {
-    output[i].l = Clip16(static_cast<int32_t>(out[i] * 32768.0f));
-    output[i].r = Clip16(static_cast<int32_t>(aux[i] * 32768.0f));
+    float vol = settings.state().output_volume;
+    output[i].l = Clip16(static_cast<int32_t>(out[i] * vol * 32768.0f));
+    output[i].r = Clip16(static_cast<int32_t>(aux[i] * vol * 32768.0f));
   }
   ui.set_strumming_flag(performance_state.strum);
 #ifdef PROFILE_INTERRUPT

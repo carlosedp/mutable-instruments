@@ -29,6 +29,7 @@
 #include "rings/cv_scaler.h"
 
 #include <algorithm>
+#include <cmath>
 
 #include "stmlib/dsp/dsp.h"
 #include "stmlib/system/storage.h"
@@ -89,6 +90,11 @@ void CvScaler::Init(CalibrationData* calibration_data) {
   frequency_locked_ = false;
   normalization_probe_enabled_ = true;
   normalization_probe_forced_state_ = false;
+  volume_adjust_active_ = false;
+  freq_pickup_active_ = false;
+  freq_pot_at_entry_ = 0.0f;
+  vol_pickup_active_ = false;
+  vol_pot_at_entry_ = 0.0f;
 }
 
 void CvScaler::DetectAudioNormalization(Codec::Frame* in, size_t size) {
@@ -227,8 +233,39 @@ void CvScaler::Read(Patch* patch, PerformanceState* performance_state, Settings*
   }
   first_read_ = false;
 
-  float transpose = 60.0f * adc_lp_[ADC_CHANNEL_POT_FREQUENCY];
-  float octave_transpose = 12.0f * (floor(adc_lp_[ADC_CHANNEL_POT_FREQUENCY] * 6.999f) - 3.0f);
+  // Determine the effective frequency-pot value for pitch computation.
+  // During volume adjust mode the physical pot is repurposed; during pick-up
+  // mode the computed pitch is held until the pot drifts back to where it was.
+  float freq_pot = adc_lp_[ADC_CHANNEL_POT_FREQUENCY];
+  if (volume_adjust_active_) {
+    if (vol_pickup_active_) {
+      // Soft pick-up: wait until the pot crosses the position that matches the
+      // saved volume before we allow the knob to start changing it.
+      if (fabs(freq_pot - vol_pot_at_entry_) < 0.015f) {
+        vol_pickup_active_ = false;
+      }
+      // Volume stays at its saved value while waiting.
+    } else {
+      // Quadratic taper: more resolution at lower volumes.
+      mutable_state->output_volume = freq_pot * freq_pot;
+    }
+    // Always hold pitch using the saved pot position.
+    freq_pot = freq_pot_at_entry_;
+  } else if (freq_pickup_active_) {
+    if (frequency_locked_ && mutable_state->frequency_locked) {
+      // Frequency is already locked externally – pick-up is irrelevant.
+      freq_pickup_active_ = false;
+    } else if (fabs(freq_pot - freq_pot_at_entry_) < 0.015f) {
+      // Pot has returned to (or passed through) the saved position.
+      freq_pickup_active_ = false;
+    } else {
+      // Still waiting – keep pitch frozen at the saved pot position.
+      freq_pot = freq_pot_at_entry_;
+    }
+  }
+
+  float transpose = 60.0f * freq_pot;
+  float octave_transpose = 12.0f * (floor(freq_pot * 6.999f) - 3.0f);
 
   float hysteresis = 0.0f;
   if (frequency_locked_ && mutable_state->frequency_locked) {
@@ -306,6 +343,25 @@ int32_t CvScaler::NumChords(PerformanceState* performance_state, uint8_t polypho
       }
   }
   return 0;
+}
+
+void CvScaler::SetVolumeAdjustMode(bool active, float current_volume) {
+  if (active && !volume_adjust_active_) {
+    freq_pot_at_entry_ = adc_lp_[ADC_CHANNEL_POT_FREQUENCY];
+    freq_pickup_active_ = false;
+    volume_adjust_active_ = true;
+    // Inverse of the quadratic taper: pot position that equals current_volume.
+    vol_pot_at_entry_ = sqrtf(current_volume);
+    // Only engage pick-up if the pot is not already near that position.
+    vol_pickup_active_ = fabs(adc_lp_[ADC_CHANNEL_POT_FREQUENCY] - vol_pot_at_entry_) > 0.015f;
+  } else if (!active && volume_adjust_active_) {
+    volume_adjust_active_ = false;
+    vol_pickup_active_ = false;
+    // Arm frequency pick-up if the pot moved during volume adjustment.
+    if (fabs(adc_lp_[ADC_CHANNEL_POT_FREQUENCY] - freq_pot_at_entry_) > 0.015f) {
+      freq_pickup_active_ = true;
+    }
+  }
 }
 
 }  // namespace rings

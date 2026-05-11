@@ -1,0 +1,21 @@
+# Mutable Instruments Rings – Output Volume Control / Controle de Volume
+
+Portugues:
+
+Esse é um firmware alternativo para o Mutable Instruments Rings, que adiciona controle de volume master para as saídas ODD e EVEN, sem necessidade de um VCA ou atenuador externo. O ajuste é salvo entre ciclos de energia.
+
+Para ajustar o volume, segure o botão de Polifonia por alguns momentos até que o LED de polifonia pisque vermelho e então ajuste usando o knob de frequencia (segurando o botão). O LED de "Modo" vai mostrar com a intensidade o volume selecionado. Ao soltar o botão, o volume é salvo e o controle de frequência volta a ser controlado pelo knob normalmente.
+
+O ajuste usa um sistema de "soft pick-up", onde o volume só muda quando o knob de frequência passa pela posição correspondente ao último nível salvo (por padrão o volume é configurado como máximo), evitando mudanças abruptas. O mesmo acontece com a frequência ao soltar o botão, que só volta a ser controlada pelo knob quando ele passa pela posição original portanto se ao ajustar o volume, ele nao mudar, continue girando o knob até que ele alcance o ponto onde o volume começa a mudar, e depois continue ajustando até o nível desejado.
+
+Também fiz o mesmo mod para o firmware Mini-Elements que está incluido no zip.
+
+English:
+
+This is an alternative firmware for Mutable Instruments Rings that adds master output volume control for both ODD and EVEN outputs, without the need for an external VCA or attenuator. The setting is saved between power cycles.
+
+To adjust the volume, hold the Polyphony button for a few moments until the polyphony LED blinks red, then adjust using the frequency knob (while holding the button). The "Mode" LED will show the selected volume with its intensity. When you release the button, the volume is saved and frequency control returns to normal.
+
+The adjustment uses a "soft pick-up" system, where the volume only changes when the frequency knob passes through the position corresponding to the last saved level (by default the volume is set to maximum), avoiding abrupt changes. The same happens with frequency when you release the button, which only returns to being controlled by the knob when it passes through the original position, so if while adjusting the volume it doesn't change, keep turning the knob until it reaches the point where the volume starts to change, and then continue adjusting until you reach the desired level.
+
+I also made the same mod for the Mini-Elements firmware, which is included in the zip.

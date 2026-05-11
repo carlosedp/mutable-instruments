@@ -99,6 +99,14 @@ class CvScaler {
 
   void DetectAudioNormalization(Codec::Frame* in, size_t size);
 
+  // Enter or exit volume adjust mode. When active, the frequency pot is
+  // redirected to control output_volume and frequency is held frozen.
+  // When deactivated, pick-up mode engages until the pot returns to the
+  // position it was at when volume adjust was entered.
+  // active=true: enter volume adjust mode (current_volume is the persisted value).
+  // active=false: exit and arm frequency pick-up if the pot moved.
+  void SetVolumeAdjustMode(bool active, float current_volume = 1.0f);
+
   inline bool ready_for_calibration() const {
     return true;
   }
@@ -220,6 +228,13 @@ class CvScaler {
   bool frequency_locked_;
   bool normalization_probe_enabled_;
   bool normalization_probe_forced_state_;
+
+  // Volume adjust mode state
+  bool volume_adjust_active_;   // Frequency pot is controlling output volume
+  bool freq_pickup_active_;     // Waiting for pot to return to pre-adjust position
+  float freq_pot_at_entry_;     // LP-filtered freq pot value when volume adjust began
+  bool vol_pickup_active_;      // Waiting for pot to reach saved-volume position on entry
+  float vol_pot_at_entry_;      // Pot position equivalent to saved volume on entry
   
   static ChannelSettings channel_settings_[ADC_CHANNEL_LAST];
   
