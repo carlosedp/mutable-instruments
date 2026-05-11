@@ -1,0 +1,277 @@
+diff --git a/rings/cv_scaler.cc b/rings/cv_scaler.cc
+index 9742f20..6c4b3c5 100644
+--- a/rings/cv_scaler.cc
++++ b/rings/cv_scaler.cc
+@@ -29,6 +29,7 @@
+ #include "rings/cv_scaler.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ 
+ #include "stmlib/dsp/dsp.h"
+ #include "stmlib/system/storage.h"
+@@ -62,8 +63,9 @@ ChannelSettings CvScaler::channel_settings_[ADC_CHANNEL_LAST] = {
+   { LAW_QUADRATIC_BIPOLAR, false, 0.005f },  // ADC_CHANNEL_ATTENUVERTER_POSITION,
+ };
+ 
+-void CvScaler::Init(CalibrationData* calibration_data) {
++void CvScaler::Init(CalibrationData* calibration_data, Settings* settings) {
+   calibration_data_ = calibration_data;
++  settings_ = settings;
+ 
+   adc_.Init();
+   trigger_input_.Init();
+@@ -82,6 +84,11 @@ void CvScaler::Init(CalibrationData* calibration_data) {
+   
+   normalization_probe_enabled_ = true;
+   normalization_probe_forced_state_ = false;
++  volume_adjust_active_ = false;
++  freq_pickup_active_ = false;
++  freq_pot_at_entry_ = 0.0f;
++  vol_pickup_active_ = false;
++  vol_pot_at_entry_ = 0.0f;
+ }
+ 
+ void CvScaler::DetectAudioNormalization(Codec::Frame* in, size_t size) {
+@@ -185,8 +192,36 @@ void CvScaler::Read(Patch* patch, PerformanceState* performance_state) {
+   }
+   performance_state->fm = fm_cv_ * adc_lp_[ADC_CHANNEL_ATTENUVERTER_FREQUENCY];
+   CONSTRAIN(performance_state->fm, -48.0f, 48.0f);
+-  
+-  float transpose = 60.0f * adc_lp_[ADC_CHANNEL_POT_FREQUENCY];
++
++  // Determine the effective frequency-pot value for pitch computation.
++  // During volume adjust mode the physical pot is repurposed; during pick-up
++  // mode the computed pitch is held until the pot drifts back to where it was.
++  float freq_pot = adc_lp_[ADC_CHANNEL_POT_FREQUENCY];
++  if (volume_adjust_active_) {
++      if (vol_pickup_active_) {
++          // Soft pick-up: wait until the pot crosses the position that matches the
++          // saved volume before we allow the knob to start changing it.
++          if (fabs(freq_pot - vol_pot_at_entry_) < 0.015f) {
++              vol_pickup_active_ = false;
++          }
++          // Volume stays at its saved value while waiting.
++      } else {
++          // Quadratic taper: more resolution at lower volumes.
++          settings_->mutable_state()->output_volume = freq_pot * freq_pot;
++      }
++      // Always hold pitch using the saved pot position.
++      freq_pot = freq_pot_at_entry_;
++  } else if (freq_pickup_active_) {
++      if (fabs(freq_pot - freq_pot_at_entry_) < 0.015f) {
++          // Pot has returned to (or passed through) the saved position.
++          freq_pickup_active_ = false;
++      } else {
++          // Still waiting – keep pitch frozen at the saved pot position.
++          freq_pot = freq_pot_at_entry_;
++      }
++  }
++
++  float transpose = 60.0f * freq_pot;
+   float hysteresis = transpose - transpose_ > 0.0f ? -0.3f : +0.3f;
+   transpose_ = static_cast<int32_t>(transpose + hysteresis + 0.5f);
+   
+@@ -228,4 +263,23 @@ void CvScaler::Read(Patch* patch, PerformanceState* performance_state) {
+   trigger_input_.Read();
+ }
+ 
++void CvScaler::SetVolumeAdjustMode(bool active, float current_volume) {
++    if (active && !volume_adjust_active_) {
++        freq_pot_at_entry_ = adc_lp_[ADC_CHANNEL_POT_FREQUENCY];
++        freq_pickup_active_ = false;
++        volume_adjust_active_ = true;
++        // Inverse of the quadratic taper: pot position that equals current_volume.
++        vol_pot_at_entry_ = sqrtf(current_volume);
++        // Only engage pick-up if the pot is not already near that position.
++        vol_pickup_active_ = fabs(adc_lp_[ADC_CHANNEL_POT_FREQUENCY] - vol_pot_at_entry_) > 0.015f;
++    } else if (!active && volume_adjust_active_) {
++        volume_adjust_active_ = false;
++        vol_pickup_active_ = false;
++        // Arm frequency pick-up if the pot moved during volume adjustment.
++        if (fabs(adc_lp_[ADC_CHANNEL_POT_FREQUENCY] - freq_pot_at_entry_) > 0.015f) {
++            freq_pickup_active_ = true;
++        }
++    }
++}
++
+ }  // namespace rings
+diff --git a/rings/cv_scaler.h b/rings/cv_scaler.h
+index dd7f0fa..156caed 100644
+--- a/rings/cv_scaler.h
++++ b/rings/cv_scaler.h
+@@ -94,11 +94,19 @@ class CvScaler {
+   CvScaler() { }
+   ~CvScaler() { }
+   
+-  void Init(CalibrationData* calibration_data);
++  void Init(CalibrationData* calibration_data, Settings* settings);
+   void Read(Patch* patch, PerformanceState* performance_state);
+ 
+   void DetectAudioNormalization(Codec::Frame* in, size_t size);
+ 
++  // Enter or exit volume adjust mode. When active, the frequency pot is
++  // redirected to control output_volume and frequency is held frozen.
++  // When deactivated, pick-up mode engages until the pot returns to the
++  // position it was at when volume adjust was entered.
++  // active=true: enter volume adjust mode (current_volume is the persisted value).
++  // active=false: exit and arm frequency pick-up if the pot moved.
++  void SetVolumeAdjustMode(bool active, float current_volume = 1.0f);
++
+   inline bool ready_for_calibration() const {
+     return true;
+   }
+@@ -212,9 +220,17 @@ class CvScaler {
+   float cv_low_;
+   int32_t chord_;
+   
++  Settings* settings_;
+   bool normalization_probe_enabled_;
+   bool normalization_probe_forced_state_;
+-  
++
++  // Volume adjust mode state
++  bool volume_adjust_active_; // Frequency pot is controlling output volume
++  bool freq_pickup_active_;   // Waiting for pot to return to pre-adjust position
++  float freq_pot_at_entry_;   // LP-filtered freq pot value when volume adjust began
++  bool vol_pickup_active_;    // Waiting for pot to reach saved-volume position on entry
++  float vol_pot_at_entry_;    // Pot position equivalent to saved volume on entry
++
+   static ChannelSettings channel_settings_[ADC_CHANNEL_LAST];
+   
+   DISALLOW_COPY_AND_ASSIGN(CvScaler);
+diff --git a/rings/rings.cc b/rings/rings.cc
+index 44fd16c..3530244 100755
+--- a/rings/rings.cc
++++ b/rings/rings.cc
+@@ -117,8 +117,9 @@ void FillBuffer(Codec::Frame* input, Codec::Frame* output, size_t size) {
+   }
+   
+   for (size_t i = 0; i < size; ++i) {
+-    output[i].l = Clip16(static_cast<int32_t>(out[i] * 32768.0f));
+-    output[i].r = Clip16(static_cast<int32_t>(aux[i] * 32768.0f));
++      float vol = settings.state().output_volume;
++      output[i].l = Clip16(static_cast<int32_t>(out[i] * vol * 32768.0f));
++      output[i].r = Clip16(static_cast<int32_t>(aux[i] * vol * 32768.0f));
+   }
+   ui.set_strumming_flag(performance_state.strum);
+ #ifdef PROFILE_INTERRUPT
+@@ -138,7 +139,7 @@ void Init() {
+   string_synth.Init(reverb_buffer);
+ 
+   settings.Init();
+-  cv_scaler.Init(settings.mutable_calibration_data());
++  cv_scaler.Init(settings.mutable_calibration_data(), &settings);
+   ui.Init(&settings, &cv_scaler, &part, &string_synth);
+   
+   if (!codec.Init(!version.revised(), kSampleRate)) {
+diff --git a/rings/settings.cc b/rings/settings.cc
+index 52b152c..6c5be1f 100644
+--- a/rings/settings.cc
++++ b/rings/settings.cc
+@@ -42,6 +42,7 @@ void Settings::Init() {
+     for (size_t i = 0; i < ADC_CHANNEL_NUM_OFFSETS; ++i) {
+       data_.calibration_data.offset[i] = 0.505f;
+     }
++    data_.state.output_volume = 1.0f;
+     data_.state.polyphony = 1;
+     data_.state.model = 0;
+     data_.state.easter_egg = 0;
+diff --git a/rings/settings.h b/rings/settings.h
+index 3cf46c6..31e00b0 100644
+--- a/rings/settings.h
++++ b/rings/settings.h
+@@ -44,6 +44,8 @@ struct CalibrationData {
+ };
+ 
+ struct State {
++    float output_volume;             // Master output volume: 0.0 (silent) to 1.0 (full)
++
+   uint8_t polyphony;
+   uint8_t model;
+   uint8_t easter_egg;
+@@ -53,7 +55,7 @@ struct State {
+ struct SettingsData {
+   CalibrationData calibration_data; // 40 bytes
+   State state;  // 4 bytes
+-  uint8_t padding[20];
++  uint8_t padding[16];
+ };
+ 
+ class Settings {
+diff --git a/rings/ui.cc b/rings/ui.cc
+index 0a5dc5a..561c3a9 100755
+--- a/rings/ui.cc
++++ b/rings/ui.cc
+@@ -29,6 +29,7 @@
+ #include "rings/ui.h"
+ 
+ #include <algorithm>
++#include <cmath>
+ 
+ #include "stmlib/system/system_clock.h"
+ 
+@@ -39,6 +40,7 @@
+ namespace rings {
+ 
+ const int32_t kLongPressDuration = 3000;
++const int32_t kMediumPressDuration = 200;
+ 
+ using namespace std;
+ using namespace stmlib;
+@@ -102,8 +104,23 @@ void Ui::Poll() {
+       if (pressed_time > kLongPressDuration) {
+         queue_.AddEvent(CONTROL_SWITCH, i, pressed_time);
+         press_time_[i] = 0;
++      } else if (pressed_time > kMediumPressDuration &&
++                 mode_ == UI_MODE_NORMAL &&
++                 i == 0 &&
++                 !switches_.pressed(1)) {
++          // Polyphony button held alone: enter output-volume adjust mode.
++          // Zero press_time to suppress the normal long-hold and release events.
++          press_time_[i] = 0;
++          mode_ = UI_MODE_VOLUME_ADJUST;
++          cv_scaler_->SetVolumeAdjustMode(true, settings_->state().output_volume);
++      }
++      }
++      if (mode_ == UI_MODE_VOLUME_ADJUST && switches_.released(0)) {
++          // Polyphony button released: leave volume adjust mode.
++          mode_ = UI_MODE_NORMAL;
++          cv_scaler_->SetVolumeAdjustMode(false);
++          settings_->Save();
+       }
+-    }
+     if (switches_.released(i) && press_time_[i] != 0) {
+       queue_.AddEvent(
+           CONTROL_SWITCH,
+@@ -193,6 +210,18 @@ void Ui::Poll() {
+       leds_.set(0, false, slow_blink);
+       leds_.set(1, false, slow_blink);
+       break;
++
++    case UI_MODE_VOLUME_ADJUST: {
++        // LED 0: red blink – indicates volume-adjust mode is active.
++        // LED 1: green brightness proportional to current output volume.
++        uint8_t pwm = system_clock.milliseconds() & 15;
++        float vol = settings_->state().output_volume;
++        // Invert the quadratic taper for display (show linear perception).
++        uint8_t vol_led = static_cast<uint8_t>(sqrtf(vol) * 15.0f);
++        bool mode_blink = (system_clock.milliseconds() & 255) > 128;
++        leds_.set(0, mode_blink, false);
++        leds_.set(1, false, pwm < vol_led);
++    } break;
+     
+     case UI_MODE_EASTER_EGG_INTRO:
+       {
+diff --git a/rings/ui.h b/rings/ui.h
+index 556d5b9..31889b5 100755
+--- a/rings/ui.h
++++ b/rings/ui.h
+@@ -45,6 +45,7 @@ class StringSynthPart;
+ 
+ enum UiMode {
+   UI_MODE_NORMAL,
++  UI_MODE_VOLUME_ADJUST,
+   UI_MODE_CALIBRATION_C1,
+   UI_MODE_CALIBRATION_C3,
+   UI_MODE_CALIBRATION_LOW,
